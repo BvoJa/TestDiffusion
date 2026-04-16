@@ -47,7 +47,7 @@ def prepare_model():
     # 2. Load Model (phần này giữ nguyên như cũ)
     config = OmegaConf.load(CONFIG_PATH)
     print(f"[*] Đang nạp model vào GPU...")
-    pl_sd = torch.load(CKPT_PATH, map_location="cpu", weights_only=False)
+    pl_sd = torch.load(CKPT_PATH, map_location="cpu")
     sd = pl_sd["state_dict"]
     model = instantiate_from_config(config.model)
     model.load_state_dict(sd, strict=False)
