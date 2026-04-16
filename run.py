@@ -55,17 +55,18 @@ def prepare_model():
     return model
 
 @torch.no_grad()
-def ddim_inversion(model, sampler, latent, num_steps=50):
+def ddim_inversion(model, sampler, latent, cond, num_steps=50): # Đã thêm cond
     sampler.make_schedule(ddim_num_steps=num_steps, ddim_eta=0, verbose=False)
     alphas = sampler.ddim_alphas
     z = latent.clone()
     for i in range(num_steps):
         model_t = torch.tensor([sampler.ddim_timesteps[i]], device=latent.device)
-        noise_pred = model.apply_model(z, model_t, None) 
+        
+        # Thay None bằng cond ở đây
+        noise_pred = model.apply_model(z, model_t, cond) 
         
         alpha_cur = alphas[i]
         alpha_next = alphas[i+1] if i < num_steps - 1 else alphas[-1]
-        
         z0_reconstructed = (z - (1 - alpha_cur).sqrt() * noise_pred) / alpha_cur.sqrt()
         z = alpha_next.sqrt() * z0_reconstructed + (1 - alpha_next).sqrt() * noise_pred
     return z
@@ -86,9 +87,11 @@ def execute_reconstruction(steps=50):
     # 2. Encode sang Latent Space
     init_latent = model.get_first_stage_encoding(model.encode_first_stage(img_tensor))
 
+    c = model.get_learned_conditioning([""])
+
     # 3. DDIM Inversion (Tìm nhiễu xác định)
     print(f"[*] Bắt đầu quy trình Inversion...")
-    inverted_latent = ddim_inversion(model, sampler, init_latent, num_steps=steps)
+    inverted_latent = ddim_inversion(model, sampler, init_latent, c, num_steps=steps)
 
     # 4. DDIM Reconstruction (Tái tạo từ nhiễu đó)
     print(f"[*] Bắt đầu quy trình Tái tạo...")
@@ -96,7 +99,7 @@ def execute_reconstruction(steps=50):
         S=steps, 
         batch_size=1, 
         shape=init_latent.shape[1:], 
-        conditioning=None, 
+        conditioning=c, 
         eta=0.0, 
         x_T=inverted_latent
     )
