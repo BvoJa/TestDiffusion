@@ -2,6 +2,8 @@ import os
 import sys
 import torch
 import numpy as np
+import matplotlib
+matplotlib.use('Agg') # THÊM DÒNG NÀY VÀO TRƯỚC LÚC IMPORT PYPLOT
 import matplotlib.pyplot as plt
 from PIL import Image
 from omegaconf import OmegaConf
