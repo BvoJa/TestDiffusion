@@ -131,4 +131,4 @@ def execute_reconstruction(steps=50):
 
 # Chạy script
 if __name__ == "__main__":
-    execute_reconstruction(steps=200)
+    execute_reconstruction(steps=500)
