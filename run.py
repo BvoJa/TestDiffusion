@@ -115,4 +115,4 @@ def execute_reconstruction(steps=50):
     print(f"[*] Hoàn tất! Kết quả: {BASE_DIR}/{result_name}")
 
 if __name__ == "__main__":
-    execute_reconstruction(steps=100)
+    execute_reconstruction(steps=200)
