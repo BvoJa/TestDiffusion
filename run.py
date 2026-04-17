@@ -13,7 +13,7 @@ from tqdm import tqdm
 # --- THIẾT LẬP ĐƯỜNG DẪN ---
 BASE_DIR = "/kaggle/working/TestDiffusion"
 # Đường dẫn ảnh bạn đã cung cấp
-IMAGE_PATH = "/kaggle/input/datasets/lhgbao/portrait/trump.jpg" 
+IMAGE_PATH = "/kaggle/input/datasets/lhgbao/faceee/face.png" 
 
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
@@ -123,7 +123,7 @@ def execute_reconstruction(steps=50):
     axes[1].axis('off')
 
     plt.tight_layout()
-    plt.show()
+    # plt.show()
     
     # Lưu kết quả
     Image.fromarray(rec_image).save(os.path.join(BASE_DIR, "trump_reconstructed.png"))
