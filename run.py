@@ -126,8 +126,8 @@ def execute_reconstruction(steps=50):
     # plt.show()
     
     # Lưu kết quả
-    Image.fromarray(rec_image).save(os.path.join(BASE_DIR, "trump_reconstructed.png"))
-    print(f"[*] Hoàn tất! Ảnh đã được lưu tại {BASE_DIR}/trump_reconstructed.png")
+    Image.fromarray(rec_image).save(os.path.join(BASE_DIR, "face_reconstructed.png"))
+    print(f"[*] Hoàn tất! Ảnh đã được lưu tại {BASE_DIR}/face_reconstructed.png")
 
 # Chạy script
 if __name__ == "__main__":
