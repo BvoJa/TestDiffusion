@@ -110,7 +110,7 @@ def execute_reconstruction(steps=50):
     plt.tight_layout()
     
     # Lưu kết quả
-    result_name = "face_reconstructed_v15.png"
+    result_name = "face_reconstructed.png"
     Image.fromarray(rec_image).save(os.path.join(BASE_DIR, result_name))
     print(f"[*] Hoàn tất! Kết quả: {BASE_DIR}/{result_name}")
 
