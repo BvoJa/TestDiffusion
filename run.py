@@ -85,16 +85,37 @@ def execute_reconstruction(steps=50):
     print(f"[*] Bắt đầu quy trình Inversion ({steps} steps)...")
     inverted_latent = ddim_inversion(model, sampler, init_latent, c, num_steps=steps)
 
+    # --- ĐOẠN THÊM MỚI 1: Tạo thư mục lưu ảnh ---
+    steps_dir = os.path.join(BASE_DIR, "reconstruction_steps")
+    os.makedirs(steps_dir, exist_ok=True)
+
     print(f"[*] Bắt đầu quy trình Tái tạo...")
-    samples, _ = sampler.sample(
+    # --- ĐOẠN CHỈNH SỬA: Lấy intermediates và thêm log_every_t=1 ---
+    samples, intermediates = sampler.sample(
         S=steps, 
         batch_size=1, 
         shape=init_latent.shape[1:], 
         conditioning=c, 
         eta=0.0, 
-        x_T=inverted_latent
+        x_T=inverted_latent,
+        log_every_t=1  # Bắt buộc: Lưu latent ở MỖI bước
     )
 
+    # --- ĐOẠN THÊM MỚI 2: Vòng lặp giải mã và lưu ảnh từng step ---
+    x_inter = intermediates['x_inter'] # Chứa danh sách latents từ nhiễu đến rõ
+    print(f"[*] Đang giải mã và lưu {len(x_inter)} ảnh trung gian vào {steps_dir}...")
+    
+    for i, latent_t in enumerate(tqdm(x_inter, desc="Lưu ảnh steps")):
+        # Giải mã latent hiện tại bằng VAE
+        rec_step = model.decode_first_stage(latent_t)
+        rec_step = torch.clamp((rec_step + 1.0) / 2.0, min=0.0, max=1.0)
+        rec_img = (rec_step.cpu().permute(0, 2, 3, 1).numpy()[0] * 255).astype(np.uint8)
+        
+        # Lưu thành file PNG
+        step_filename = f"step_{i:03d}.png"
+        Image.fromarray(rec_img).save(os.path.join(steps_dir, step_filename))
+
+    # --- PHẦN LƯU ẢNH CUỐI CÙNG (Giữ nguyên) ---
     rec_latent = model.decode_first_stage(samples)
     rec_latent = torch.clamp((rec_latent + 1.0) / 2.0, min=0.0, max=1.0)
     rec_image = (rec_latent.cpu().permute(0, 2, 3, 1).numpy()[0] * 255).astype(np.uint8)
@@ -112,7 +133,7 @@ def execute_reconstruction(steps=50):
     # Lưu kết quả
     result_name = "face_reconstructed.png"
     Image.fromarray(rec_image).save(os.path.join(BASE_DIR, result_name))
-    print(f"[*] Hoàn tất! Kết quả: {BASE_DIR}/{result_name}")
+    print(f"[*] Hoàn tất! Kết quả cuối cùng: {BASE_DIR}/{result_name}")
 
 if __name__ == "__main__":
-    execute_reconstruction(steps=200)
+    execute_reconstruction(steps=50)
