@@ -103,7 +103,7 @@ def execute_reconstruction(steps=50):
     init_latent = model.get_first_stage_encoding(model.encode_first_stage(img_tensor))
     
     # Để có Attention Map rõ ràng, ta dùng prompt có từ khóa "eyebrows"
-    prompt = "a man with eyebrows"
+    prompt = "a man with no eyebrows"
     c = model.get_learned_conditioning([prompt])
 
     # 1. DDIM Inversion (Tìm nhiễu gốc)
