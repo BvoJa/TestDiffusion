@@ -31,32 +31,23 @@ class AttentionStore:
         self.current_step_data = []
 
     def __call__(self, module, input, output):
-        # Ma trận chú ý thường có dạng: (batch * heads, query_length, context_length)
-        # Với ảnh 512x512, query_length có thể là 4096 (64x64), 1024 (32x32), v.v.
-        # Chúng ta lấy trung bình của các heads để dễ quan sát
-        if output.shape[1] <= 4096: # Chỉ lấy các layer có độ phân giải đủ lớn (64x64 hoặc 32x32)
-            self.current_step_data.append(output.cpu())
+        # Lấy output của CrossAttention (thường là softmax results hoặc hidden states)
+        # Chúng ta lọc lấy các lớp có độ phân giải latent 32x32 hoặc 64x64
+        if isinstance(output, torch.Tensor) and output.shape[1] in [1024, 4096]:
+            self.current_step_data.append(output.detach().cpu())
 
     def next_step(self):
         if len(self.current_step_data) > 0:
-            # Lấy trung bình tất cả các layer attention trong 1 bước
-            all_layers = torch.cat([attn.flatten(1) for attn in self.current_step_data], dim=1)
             self.step_attentions.append(self.current_step_data)
-            self.current_step_data = []
+        self.current_step_data = []
 
 def register_attention_hooks(model, store):
-    def hook_fn(module, input, output):
-        # Trong kiến trúc LDM, CrossAttention tính toán attention và trả về output
-        # Chúng ta cần capture ma trận softmax bên trong, nhưng để đơn giản, 
-        # ta sẽ lấy output của lớp attention (đã được nhân với giá trị) 
-        # hoặc can thiệp sâu hơn. Ở đây ta giả định ghi lại để xem vùng kích hoạt.
-        store(module, input, output)
-
-    # Lặp qua các module để tìm CrossAttention
+    # Xóa các hook cũ nếu có để tránh tràn bộ nhớ
+    hooks = []
     for name, module in model.model.diffusion_model.named_modules():
         if module.__class__.__name__ == "CrossAttention":
-            # Chỉ hook vào các lớp Cross-Attention (liên quan đến Prompt)
-            module.register_forward_hook(store)
+            hooks.append(module.register_forward_hook(store))
+    return hooks
 
 def prepare_model():
     # 1. Tải checkpoint v1.5
@@ -103,80 +94,79 @@ def ddim_inversion(model, sampler, latent, cond, num_steps=50):
 
 @torch.no_grad()
 def execute_reconstruction(steps=50):
-    # (Giữ nguyên phần prepare_model và load ảnh của bạn)
-    from ldm.models.diffusion.ddim import DDIMSampler
-    model = prepare_model()
+    model = prepare_model() # Sử dụng hàm prepare_model của bạn
     sampler = DDIMSampler(model)
-    
+
+    # Load và xử lý ảnh
     raw_image = Image.open(IMAGE_PATH).convert("RGB").resize((512, 512))
     img_tensor = torch.from_numpy(np.array(raw_image)).float().div(127.5).sub(1.0).permute(2, 0, 1).unsqueeze(0).cuda()
     init_latent = model.get_first_stage_encoding(model.encode_first_stage(img_tensor))
     
-    # Prompt: Nên dùng prompt có nghĩa để Attention Map rõ ràng hơn
-    prompt = "a man with eyebrows" 
+    # Để có Attention Map rõ ràng, ta dùng prompt có từ khóa "eyebrows"
+    prompt = "a man with eyebrows"
     c = model.get_learned_conditioning([prompt])
 
-    # 1. DDIM Inversion
-    print(f"[*] Inverting...")
+    # 1. DDIM Inversion (Tìm nhiễu gốc)
+    print(f"[*] Đang thực hiện DDIM Inversion...")
     inverted_latent = ddim_inversion(model, sampler, init_latent, c, num_steps=steps)
 
-    # 2. Thiết lập Hook
-    attn_store = AttentionStore()
-    register_attention_hooks(model, attn_store)
+    # 2. Đăng ký Hook để soi Attention
+    store = AttentionStore()
+    hooks = register_attention_hooks(model, store)
 
-    # 3. Vòng lặp tái tạo thủ công (thay cho sampler.sample)
-    # Để lưu được map ở mỗi bước, ta chạy thủ công từng bước DDIM
-    os.makedirs(os.path.join(BASE_DIR, "attn_maps"), exist_ok=True)
-    os.makedirs(os.path.join(BASE_DIR, "reconstruction_steps"), exist_ok=True)
-    
+    # 3. Chạy quá trình Tái tạo (Sampling) thủ công
+    # Lấy các tham số alpha từ sampler
     sampler.make_schedule(ddim_num_steps=steps, ddim_eta=0, verbose=False)
-    timesteps = np.flip(sampler.ddim_timesteps) # Chạy từ nhiễu về ảnh rõ
-    alphas = np.flip(sampler.ddim_alphas)
+    
+    # SỬA LỖI TẠI ĐÂY: Chuyển sang numpy/list an toàn
+    ddim_timesteps = sampler.ddim_timesteps.tolist()[::-1] # Đảo ngược list timestep
+    ddim_alphas = sampler.ddim_alphas.cpu().numpy().tolist()[::-1] # Đảo ngược list alpha
     
     z = inverted_latent.clone()
-    
-    print(f"[*] Bắt đầu tái tạo và lưu Attention Map...")
-    for i, t in enumerate(tqdm(timesteps)):
-        ts = torch.tensor([t], device=z.device)
-        
-        # Bước UNet: Hook sẽ tự động lưu dữ liệu vào attn_store ở đây
-        noise_pred = model.apply_model(z, ts, c)
-        
-        # Tính bước tiếp theo (DDIM Step)
-        alpha_cur = alphas[i]
-        alpha_prev = alphas[i+1] if i < steps - 1 else alphas[-1]
-        z0_reconstructed = (z - (1 - alpha_cur).sqrt() * noise_pred) / alpha_cur.sqrt()
-        z = alpha_prev.sqrt() * z0_reconstructed + (1 - alpha_prev).sqrt() * noise_pred
-        
-        # --- LƯU ẢNH TRUNG GIAN ---
-        rec_step = model.decode_first_stage(z)
-        rec_step = torch.clamp((rec_step + 1.0) / 2.0, min=0.0, max=1.0)
-        rec_img = (rec_step.cpu().permute(0, 2, 3, 1).numpy()[0] * 255).astype(np.uint8)
-        Image.fromarray(rec_img).save(os.path.join(BASE_DIR, f"reconstruction_steps/step_{i:03d}.png"))
+    os.makedirs(os.path.join(BASE_DIR, "attn_maps"), exist_ok=True)
+    os.makedirs(os.path.join(BASE_DIR, "reconstruction_steps"), exist_ok=True)
 
+    print(f"[*] Đang tái tạo và trích xuất Attention Maps...")
+    for i in range(len(ddim_timesteps)):
+        t = torch.tensor([ddim_timesteps[i]], device=z.device)
+        
+        # Chạy UNet (Hook sẽ tự lưu data vào store)
+        noise_pred = model.apply_model(z, t, c)
+        
+        # Tính bước DDIM tiếp theo
+        alpha_cur = ddim_alphas[i]
+        alpha_next = ddim_alphas[i+1] if i < len(ddim_alphas) - 1 else ddim_alphas[-1]
+        
+        z0_reconstructed = (z - np.sqrt(1 - alpha_cur) * noise_pred) / np.sqrt(alpha_cur)
+        z = np.sqrt(alpha_next) * z0_reconstructed + np.sqrt(1 - alpha_next) * noise_pred
+        
         # --- LƯU ATTENTION MAP ---
-        if len(attn_store.current_step_data) > 0:
-            # Lấy 1 map tiêu biểu (ví dụ layer cuối của UNet, thường là layer 0 hoặc -1)
-            # Reshape về dạng 2D. Giả sử map là 16x16 hoặc 32x32 hoặc 64x64
-            last_attn = attn_store.current_step_data[-1] # Lấy layer cuối cùng
+        if len(store.current_step_data) > 0:
+            # Lấy layer attention cuối cùng của bước này
+            attn = store.current_step_data[-1] 
+            # Giả lập bản đồ nhiệt: Trung bình trên các đầu chú ý
+            res = int(attn.shape[1]**0.5) # Thường là 32 hoặc 64
+            # Gom thông tin không gian: (Batch, Pixels, Dim) -> (Res, Res)
+            heatmap = attn[0].mean(dim=-1).reshape(res, res).numpy()
             
-            # Tính trung bình trên các heads và các tokens để ra bản đồ nhiệt không gian
-            # (Hoặc bạn có thể chọn token index cụ thể cho "eyebrows")
-            spatial_map = last_attn.mean(dim=0).mean(dim=-1) 
-            res = int(spatial_map.shape[0]**0.5)
-            spatial_map = spatial_map.reshape(res, res).numpy()
-            
-            # Vẽ và lưu Heatmap
-            plt.figure(figsize=(5,5))
-            plt.imshow(spatial_map, cmap='jet')
-            plt.title(f"Attention Map Step {i}")
+            plt.figure(figsize=(4,4))
+            plt.imshow(heatmap, cmap='hot')
             plt.axis('off')
-            plt.savefig(os.path.join(BASE_DIR, f"attn_maps/attn_{i:03d}.png"))
+            plt.savefig(os.path.join(BASE_DIR, f"attn_maps/step_{i:03d}.png"), bbox_inches='tight', pad_inches=0)
             plt.close()
-            
-        attn_store.next_step() # Reset cho bước sau
 
-    print(f"[*] Xong! Kiểm tra thư mục 'attn_maps' và 'reconstruction_steps'")
+        # Lưu ảnh tái tạo tại step này để so sánh
+        if i % 5 == 0 or i == steps - 1:
+            rec_img = model.decode_first_stage(z)
+            rec_img = torch.clamp((rec_img + 1.0) / 2.0, min=0.0, max=1.0)
+            rec_img = (rec_img.cpu().permute(0, 2, 3, 1).numpy()[0] * 255).astype(np.uint8)
+            Image.fromarray(rec_img).save(os.path.join(BASE_DIR, f"reconstruction_steps/step_{i:03d}.png"))
+        
+        store.next_step()
+
+    # Gỡ hook sau khi xong để giải phóng GPU
+    for h in hooks: h.remove()
+    print(f"[*] Hoàn tất! Kết quả tại: {BASE_DIR}/attn_maps")
 
 if __name__ == "__main__":
     execute_reconstruction(steps=50)
